@@ -39,9 +39,18 @@ let battlefieldAtmosphere = null;
 
 let isAnimating = false;
 
-const BOARD_WIDTH_IN = 40;
-const BOARD_HEIGHT_IN = 29.5;
-const PIXELS_PER_INCH = 24;
+const MAP_BLUEPRINT = window.ASO_MAP_BLUEPRINT || null;
+const DEFAULT_BOARD_WIDTH_IN = 40;
+const DEFAULT_BOARD_HEIGHT_IN = 30;
+const BOARD_WIDTH_IN = Number.isFinite(Number(MAP_BLUEPRINT?.board?.widthIn)) && Number(MAP_BLUEPRINT?.board?.widthIn) > 0
+  ? Number(MAP_BLUEPRINT.board.widthIn)
+  : DEFAULT_BOARD_WIDTH_IN;
+const BOARD_HEIGHT_IN = Number.isFinite(Number(MAP_BLUEPRINT?.board?.heightIn)) && Number(MAP_BLUEPRINT?.board?.heightIn) > 0
+  ? Number(MAP_BLUEPRINT.board.heightIn)
+  : DEFAULT_BOARD_HEIGHT_IN;
+const BASE_PIXELS_PER_INCH = 24;
+const BATTLEFIELD_SCALE_BOOST = 1.2;
+let pixelsPerInch = BASE_PIXELS_PER_INCH;
 const UNIT_RADIUS_IN = 0.5;
 const MIN_GAP_IN = 0.9;
 const MELEE_RANGE_IN = 1;
@@ -76,6 +85,25 @@ const DEPLOY_BATCH_SIZE = 2;
 const PATH_SAMPLE_STEP_IN = 0.18;
 const MOVE_ANIMATION_MS_PER_IN = 85;
 const ROOMS_STORAGE_KEY = "wh40.rooms.v1";
+const UI_THEME_STORAGE_KEY = "athoria.ui.theme.v1";
+const UI_THEME_COLORS_STORAGE_KEY = "athoria.ui.theme.colors.v1";
+const MAP_SELECTION_STORAGE_KEY = window.ASO_MAP_SELECTION_STORAGE_KEY || "athoria.selectedMapFile.v1";
+const UI_THEMES = ["ember", "forest", "ash", "royal", "custom"];
+const MAP_LAYOUTS = ["building"];
+const MAP_FILES = Array.isArray(window.ASO_MAP_FILES) ? window.ASO_MAP_FILES : [];
+const UI_COLOR_CONTROLS = [
+  { id: "pageBgA", cssVar: "--page-bg-a", label: "Tlo A" },
+  { id: "pageBgB", cssVar: "--page-bg-b", label: "Tlo B" },
+  { id: "pageBgC", cssVar: "--page-bg-c", label: "Tlo C" },
+  { id: "panelBgA", cssVar: "--panel-bg-a", label: "Panel A" },
+  { id: "panelBgB", cssVar: "--panel-bg-b", label: "Panel B" },
+  { id: "panelBorder", cssVar: "--panel-border", label: "Obramowanie paneli" },
+  { id: "buttonA", cssVar: "--button-a", label: "Przycisk A" },
+  { id: "buttonB", cssVar: "--button-b", label: "Przycisk B" },
+  { id: "buttonBorder", cssVar: "--button-border", label: "Obramowanie przyciskow" },
+  { id: "textMain", cssVar: "--text-main", label: "Tekst glowny" },
+  { id: "textSoft", cssVar: "--text-soft", label: "Tekst pomocniczy" },
+];
 
 const TERRAIN_DENSITY_PRESETS = {
   light: { largePerSide: 1, smallPerSide: 4, decorMin: 8, decorMax: 14 },
@@ -89,6 +117,14 @@ const TERRAIN_DENSITY_PRESETS = {
 };
 
 let terrainGenerationConfig = { ...TERRAIN_DENSITY_PRESETS.normal };
+let activeMapLayout = "building";
+let customThemeColors = {};
+let victoryState = {
+  points: { player: 0, enemy: 0 },
+  damageVpAwarded: { player: 0, enemy: 0 },
+  initialArmyPoints: { player: 0, enemy: 0 },
+};
+let battleRoster = { player: [], enemy: [] };
 
 const TERRAIN_CATALOG = {
   large: [
@@ -116,6 +152,195 @@ const GAME_RULES_GUIDE = window.GAME_RULES_GUIDE || {
   title: "Instrukcja Gry",
   body: "Brak zaladowanego pliku gameGuideData.js.",
 };
+function normalizeBlueprintDirection(value) {
+  const raw = String(value || "").trim().toLowerCase();
+
+  if (raw === "north" || raw === "n") {
+    return "north";
+  }
+
+  if (raw === "south" || raw === "s" || raw === "sount") {
+    return "south";
+  }
+
+  if (raw === "east" || raw === "e") {
+    return "east";
+  }
+
+  if (raw === "west" || raw === "w") {
+    return "west";
+  }
+
+  return null;
+}
+
+function clampMapX(value) {
+  return clamp(Number(value) || 0, 0, BOARD_WIDTH_IN);
+}
+
+function clampMapY(value) {
+  return clamp(Number(value) || 0, 0, BOARD_HEIGHT_IN);
+}
+
+function getPixelsPerInch() {
+  return pixelsPerInch;
+}
+
+function updateBattlefieldScale() {
+  const field = document.getElementById("battlefield");
+
+  if (!field) {
+    return;
+  }
+
+  const topOffset = Math.max(0, field.getBoundingClientRect().top || 0);
+  const viewportWidthPx = Math.max(320, Math.floor(window.innerWidth * 0.9));
+  const viewportHeightPx = Math.max(260, window.innerHeight - topOffset - 24);
+  const fitScale = Math.min(
+    BASE_PIXELS_PER_INCH,
+    viewportWidthPx / BOARD_WIDTH_IN,
+    viewportHeightPx / BOARD_HEIGHT_IN
+  );
+
+  // Slightly boost visual size while keeping integer px/in to avoid subpixel wobble.
+  const boostedScale = Math.min(BASE_PIXELS_PER_INCH, fitScale * BATTLEFIELD_SCALE_BOOST);
+  const snappedScale = Math.max(8, Math.floor(boostedScale));
+  pixelsPerInch = clamp(snappedScale, 8, BASE_PIXELS_PER_INCH);
+  field.style.setProperty("--scale", String(pixelsPerInch));
+}
+
+function normalizeBlueprintColor(value) {
+  const text = String(value || "").trim();
+
+  if (!text) {
+    return null;
+  }
+
+  if (typeof CSS !== "undefined" && typeof CSS.supports === "function" && CSS.supports("color", text)) {
+    return text;
+  }
+
+  return normalizeHexColor(text);
+}
+
+function normalizeBlueprintSegment(entry, defaultThickness = 0.48) {
+  if (!entry || typeof entry !== "object") {
+    return null;
+  }
+
+  const direction = normalizeBlueprintDirection(entry.direction || entry.dir || entry.orientation);
+  const anchorX = Number(entry.x ?? entry.xIn);
+  const anchorY = Number(entry.y ?? entry.yIn);
+  const widthRaw = Number(entry.width ?? entry.wIn);
+  const heightRaw = Number(entry.height ?? entry.hIn);
+
+  if (!Number.isFinite(anchorX) || !Number.isFinite(anchorY)) {
+    return null;
+  }
+
+  const customColor = normalizeBlueprintColor(entry.color);
+  const customLabel = entry.label != null
+    ? String(entry.label).trim()
+    : (entry.number != null ? String(entry.number).trim() : "");
+
+  // Directional format: x/y is an endpoint anchor, direction defines growth axis.
+  if (direction) {
+    if (direction === "east" || direction === "west") {
+      const length = Math.max(0.2, Number.isFinite(widthRaw) ? widthRaw : (Number.isFinite(heightRaw) ? heightRaw : defaultThickness));
+      const thickness = Math.max(0.2, Number.isFinite(heightRaw) ? heightRaw : (Number.isFinite(widthRaw) ? Math.min(widthRaw, defaultThickness) : defaultThickness));
+      const centerX = direction === "east" ? anchorX + length * 0.5 : anchorX - length * 0.5;
+
+      return {
+        xIn: clampMapX(centerX),
+        yIn: clampMapY(anchorY),
+        wIn: length,
+        hIn: thickness,
+        color: customColor,
+        label: customLabel || null,
+      };
+    }
+
+    const length = Math.max(0.2, Number.isFinite(heightRaw) ? heightRaw : (Number.isFinite(widthRaw) ? widthRaw : defaultThickness));
+    const thickness = Math.max(0.2, Number.isFinite(widthRaw) ? widthRaw : (Number.isFinite(heightRaw) ? Math.min(heightRaw, defaultThickness) : defaultThickness));
+    const centerY = direction === "south" ? anchorY + length * 0.5 : anchorY - length * 0.5;
+
+    return {
+      xIn: clampMapX(anchorX),
+      yIn: clampMapY(centerY),
+      wIn: thickness,
+      hIn: length,
+      color: customColor,
+      label: customLabel || null,
+    };
+  }
+
+  // Legacy format: xIn/yIn is segment center.
+  return {
+    xIn: clampMapX(anchorX),
+    yIn: clampMapY(anchorY),
+    wIn: Math.max(0.2, Number.isFinite(widthRaw) ? widthRaw : defaultThickness),
+    hIn: Math.max(0.2, Number.isFinite(heightRaw) ? heightRaw : defaultThickness),
+    color: customColor,
+    label: customLabel || null,
+  };
+}
+
+function getBlueprintObjectiveEntries(type) {
+  if (!MAP_BLUEPRINT || !MAP_BLUEPRINT.points || !Array.isArray(MAP_BLUEPRINT.points[type])) {
+    return [];
+  }
+
+  return MAP_BLUEPRINT.points[type]
+    .map((entry, index) => ({
+      id: String(entry?.id || `${type}-${index + 1}`),
+      type,
+      owner: null,
+      xIn: clampMapX(entry?.xIn),
+      yIn: clampMapY(entry?.yIn),
+    }));
+}
+
+function getBlueprintWalls() {
+  if (!MAP_BLUEPRINT || !Array.isArray(MAP_BLUEPRINT.walls)) {
+    return [];
+  }
+
+  const defaultThickness = Math.max(0.2, Number(MAP_BLUEPRINT?.wallThicknessIn) || 0.48);
+
+  return MAP_BLUEPRINT.walls
+    .map((entry, index) => {
+      const normalized = normalizeBlueprintSegment(entry, defaultThickness);
+
+      if (!normalized) {
+        return null;
+      }
+
+      if (!normalized.label) {
+        normalized.label = String(index + 1);
+      }
+
+      return normalized;
+    })
+    .filter(Boolean);
+}
+
+function hasBlueprintWallsConfig() {
+  return Boolean(MAP_BLUEPRINT && Array.isArray(MAP_BLUEPRINT.walls));
+}
+
+function getBlueprintBlockers() {
+  if (!MAP_BLUEPRINT || !Array.isArray(MAP_BLUEPRINT.blockers)) {
+    return [];
+  }
+
+  return MAP_BLUEPRINT.blockers
+    .map((entry) => normalizeBlueprintSegment(entry, 0.6))
+    .filter(Boolean);
+}
+
+function hasBlueprintBlockersConfig() {
+  return Boolean(MAP_BLUEPRINT && Array.isArray(MAP_BLUEPRINT.blockers));
+}
 
 function getFactionUnitLibrary() {
   normalizeWeaponLoadoutsOnce();
@@ -177,6 +402,236 @@ function closeLorePanel() {
 
   modal.classList.remove("lore-modal--open");
   modal.setAttribute("aria-hidden", "true");
+}
+
+function toggleMainMenuPanel(panelId) {
+  const panels = ["loreMenuPanel", "optionsMenuPanel"];
+
+  panels.forEach((id) => {
+    const panel = document.getElementById(id);
+
+    if (!panel) {
+      return;
+    }
+
+    if (id === panelId) {
+      panel.style.display = panel.style.display === "none" ? "block" : "none";
+    } else {
+      panel.style.display = "none";
+    }
+  });
+}
+
+function closeMainMenuPanels() {
+  ["loreMenuPanel", "optionsMenuPanel"].forEach((id) => {
+    const panel = document.getElementById(id);
+
+    if (panel) {
+      panel.style.display = "none";
+    }
+  });
+}
+
+function normalizeHexColor(value) {
+  const match = String(value || "").trim().match(/^#([0-9a-f]{6})$/i);
+  return match ? `#${match[1].toLowerCase()}` : null;
+}
+
+function rgbToHex(colorText) {
+  const text = String(colorText || "").trim().toLowerCase();
+
+  if (text.startsWith("#")) {
+    const expanded = text.length === 4
+      ? `#${text[1]}${text[1]}${text[2]}${text[2]}${text[3]}${text[3]}`
+      : text;
+    return normalizeHexColor(expanded) || "#000000";
+  }
+
+  const rgbMatch = text.match(/rgba?\((\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
+
+  if (!rgbMatch) {
+    return "#000000";
+  }
+
+  const toHex = (channel) => clamp(Number(channel) || 0, 0, 255).toString(16).padStart(2, "0");
+  return `#${toHex(rgbMatch[1])}${toHex(rgbMatch[2])}${toHex(rgbMatch[3])}`;
+}
+
+function getRootCssVarHex(cssVar) {
+  const value = getComputedStyle(document.body).getPropertyValue(cssVar);
+  return rgbToHex(value);
+}
+
+function applyCustomThemeColors() {
+  Object.entries(customThemeColors).forEach(([cssVar, color]) => {
+    const normalized = normalizeHexColor(color);
+
+    if (normalized) {
+      document.body.style.setProperty(cssVar, normalized);
+    }
+  });
+}
+
+function persistCustomThemeColors() {
+  try {
+    localStorage.setItem(UI_THEME_COLORS_STORAGE_KEY, JSON.stringify(customThemeColors));
+  } catch (_error) {
+    // Ignore storage failures.
+  }
+}
+
+function loadCustomThemeColors() {
+  try {
+    const raw = localStorage.getItem(UI_THEME_COLORS_STORAGE_KEY);
+
+    if (!raw) {
+      customThemeColors = {};
+      return;
+    }
+
+    const parsed = JSON.parse(raw);
+
+    if (!parsed || typeof parsed !== "object") {
+      customThemeColors = {};
+      return;
+    }
+
+    const next = {};
+
+    UI_COLOR_CONTROLS.forEach((control) => {
+      const color = normalizeHexColor(parsed[control.cssVar]);
+
+      if (color) {
+        next[control.cssVar] = color;
+      }
+    });
+
+    customThemeColors = next;
+  } catch (_error) {
+    customThemeColors = {};
+  }
+}
+
+function refreshCustomColorInputs() {
+  UI_COLOR_CONTROLS.forEach((control) => {
+    const input = document.getElementById(`customColor-${control.id}`);
+
+    if (!input) {
+      return;
+    }
+
+    input.value = getRootCssVarHex(control.cssVar);
+  });
+}
+
+function setCustomThemeColor(controlId, value) {
+  const control = UI_COLOR_CONTROLS.find((entry) => entry.id === controlId);
+
+  if (!control) {
+    return;
+  }
+
+  const color = normalizeHexColor(value);
+
+  if (!color) {
+    return;
+  }
+
+  if (document.body.dataset.theme !== "custom") {
+    applyUiTheme("custom");
+  }
+
+  customThemeColors[control.cssVar] = color;
+  document.body.style.setProperty(control.cssVar, color);
+  persistCustomThemeColors();
+}
+
+function resetCustomThemeColors() {
+  customThemeColors = {};
+  persistCustomThemeColors();
+
+  if (document.body.dataset.theme === "custom") {
+    document.body.dataset.theme = "ember";
+    document.body.offsetHeight;
+    document.body.dataset.theme = "custom";
+  }
+
+  refreshCustomColorInputs();
+}
+
+function initCustomThemeControls() {
+  const root = document.getElementById("customColorControls");
+
+  if (!root) {
+    return;
+  }
+
+  root.innerHTML = UI_COLOR_CONTROLS.map((control) => `
+    <div class="color-control">
+      <label for="customColor-${control.id}">${control.label}</label>
+      <input id="customColor-${control.id}" type="color">
+    </div>
+  `).join("");
+
+  UI_COLOR_CONTROLS.forEach((control) => {
+    const input = document.getElementById(`customColor-${control.id}`);
+
+    if (!input) {
+      return;
+    }
+
+    input.addEventListener("input", (event) => {
+      setCustomThemeColor(control.id, event.target.value);
+    });
+  });
+
+  refreshCustomColorInputs();
+}
+
+function applyUiTheme(themeId) {
+  const normalized = UI_THEMES.includes(themeId) ? themeId : "ember";
+
+  document.body.dataset.theme = normalized;
+
+  if (normalized !== "custom") {
+    document.body.style.cssText = "";
+  }
+
+  if (normalized === "custom") {
+    applyCustomThemeColors();
+  }
+
+  const select = document.getElementById("themeSelect");
+
+  if (select) {
+    select.value = normalized;
+  }
+
+  refreshCustomColorInputs();
+}
+
+function setUiTheme(themeId) {
+  applyUiTheme(themeId);
+
+  try {
+    localStorage.setItem(UI_THEME_STORAGE_KEY, document.body.dataset.theme || "ember");
+  } catch (_error) {
+    // Ignore storage failures.
+  }
+}
+
+function loadUiTheme() {
+  let savedTheme = "ember";
+
+  try {
+    savedTheme = localStorage.getItem(UI_THEME_STORAGE_KEY) || "ember";
+  } catch (_error) {
+    savedTheme = "ember";
+  }
+
+  loadCustomThemeColors();
+
+  applyUiTheme(savedTheme);
 }
 
 document.addEventListener("keydown", (event) => {
@@ -996,23 +1451,10 @@ function getDefaultRooms() {
   return [
     {
       id: crypto.randomUUID(),
-      name: "Dziedziniec Treningowy",
-      density: "light",
-      notes: "Lzejsza mapa pod szybkie testy.",
-      createdAt: new Date().toISOString(),
-    },
-    {
-      id: crypto.randomUUID(),
-      name: "Ruiny Balans",
+      name: "Kompleks Glowny",
       density: "normal",
-      notes: "Domyslny balans terenu.",
-      createdAt: new Date().toISOString(),
-    },
-    {
-      id: crypto.randomUUID(),
-      name: "Forteca Gestwa",
-      density: "dense",
-      notes: "Wieksza liczba blokujacych i dekoracyjnych elementow.",
+      layout: "building",
+      notes: "Domyslny wariant mapy: duzy budynek z pokojami.",
       createdAt: new Date().toISOString(),
     },
   ];
@@ -1044,9 +1486,28 @@ function loadRooms() {
       id: String(room.id),
       name: String(room.name),
       density: room.density && TERRAIN_DENSITY_PRESETS[room.density] ? room.density : "normal",
+      layout: MAP_LAYOUTS.includes(room.layout) ? room.layout : "building",
       notes: room.notes ? String(room.notes) : "",
       createdAt: room.createdAt ? String(room.createdAt) : new Date().toISOString(),
     }));
+
+    const legacyDefaultNames = new Set([
+      "Dziedziniec Treningowy",
+      "Ruiny Balans",
+      "Forteca Gestwa",
+      "Kompleks A-01",
+      "Kompleks A-02",
+      "Kompleks A-03",
+    ]);
+
+    const isLegacyDefaultTriplet = rooms.length === 3 && rooms.every((room) => legacyDefaultNames.has(room.name));
+
+    if (isLegacyDefaultTriplet) {
+      rooms = getDefaultRooms();
+      activeRoomId = rooms[0]?.id || "";
+      saveRooms();
+      return;
+    }
 
     if (!rooms.length) {
       rooms = getDefaultRooms();
@@ -1069,6 +1530,7 @@ function applyActiveRoomTerrainConfig() {
   const activeRoom = getActiveRoom();
   const preset = getTerrainPresetById(activeRoom?.density || "normal");
   terrainGenerationConfig = { ...preset };
+  activeMapLayout = MAP_LAYOUTS.includes(activeRoom?.layout) ? activeRoom.layout : "building";
 }
 
 function renderRoomsPanel() {
@@ -1081,7 +1543,7 @@ function renderRoomsPanel() {
 
   const activeRoom = getActiveRoom();
   activeRoomLabel.innerText = activeRoom
-    ? `Aktywny pokoj: ${activeRoom.name} (${activeRoom.density})`
+    ? `Aktywny pokoj: ${activeRoom.name} (${activeRoom.density}, ${activeRoom.layout})`
     : "Aktywny pokoj: brak";
 
   roomList.innerHTML = rooms.map((room) => {
@@ -1092,7 +1554,7 @@ function renderRoomsPanel() {
       <article class="room-entry${selectedClass}">
         <div class="room-top">
           <strong>${room.name}</strong>
-          <span>${room.density}</span>
+          <span>${room.density} | ${room.layout}</span>
         </div>
         ${note}
         <div class="room-actions">
@@ -1107,9 +1569,10 @@ function renderRoomsPanel() {
 function createRoomFromMenu() {
   const nameInput = document.getElementById("roomNameInput");
   const densitySelect = document.getElementById("roomDensitySelect");
+  const layoutSelect = document.getElementById("roomLayoutSelect");
   const notesInput = document.getElementById("roomNotesInput");
 
-  if (!nameInput || !densitySelect || !notesInput) {
+  if (!nameInput || !densitySelect || !layoutSelect || !notesInput) {
     return;
   }
 
@@ -1120,11 +1583,13 @@ function createRoomFromMenu() {
   }
 
   const density = TERRAIN_DENSITY_PRESETS[densitySelect.value] ? densitySelect.value : "normal";
+  const layout = MAP_LAYOUTS.includes(layoutSelect.value) ? layoutSelect.value : "building";
 
   rooms.unshift({
     id: crypto.randomUUID(),
     name,
     density,
+    layout,
     notes: notesInput.value.trim(),
     createdAt: new Date().toISOString(),
   });
@@ -1170,9 +1635,91 @@ function initRoomManager() {
   renderRoomsPanel();
 }
 
+function getCurrentMapFilePath() {
+  return String(window.ASO_SELECTED_MAP_FILE || "js/mapBlueprint.js");
+}
+
+function initMapSelector() {
+  const selectEl = document.getElementById("mapBlueprintSelect");
+  const listEl = document.getElementById("roomList");
+
+  if (!selectEl) {
+    return;
+  }
+
+  const normalizedFiles = MAP_FILES.length
+    ? MAP_FILES
+    : [{ id: "default-blueprint", name: "Domyslna mapa", file: "js/mapBlueprint.js" }];
+
+  selectEl.innerHTML = normalizedFiles
+    .map((entry) => `<option value="${String(entry.file)}">${String(entry.name || entry.file)}</option>`)
+    .join("");
+
+  const currentPath = getCurrentMapFilePath();
+  const hasCurrent = normalizedFiles.some((entry) => entry.file === currentPath);
+  selectEl.value = hasCurrent ? currentPath : normalizedFiles[0].file;
+
+  if (listEl) {
+    listEl.innerHTML = normalizedFiles.map((entry) => {
+      const isActive = entry.file === selectEl.value;
+      const activeClass = isActive ? " room-entry--active" : "";
+      return `
+        <article class="room-entry${activeClass}">
+          <div class="room-top">
+            <strong>${String(entry.name || entry.file)}</strong>
+            <span>${String(entry.file)}</span>
+          </div>
+        </article>
+      `;
+    }).join("");
+  }
+
+  selectEl.addEventListener("change", () => {
+    applySelectedMapFromMenu();
+  });
+}
+
+function applySelectedMapFromMenu() {
+  const selectEl = document.getElementById("mapBlueprintSelect");
+
+  if (!selectEl) {
+    return;
+  }
+
+  const selectedFile = String(selectEl.value || "").trim();
+
+  if (!selectedFile) {
+    return;
+  }
+
+  try {
+    const current = localStorage.getItem(MAP_SELECTION_STORAGE_KEY) || "js/mapBlueprint.js";
+
+    if (current === selectedFile) {
+      const currentQuery = new URL(window.location.href).searchParams.get("map") || "";
+
+      if (currentQuery === selectedFile) {
+        return;
+      }
+    }
+
+    localStorage.setItem(MAP_SELECTION_STORAGE_KEY, selectedFile);
+  } catch (_error) {
+    // Ignore storage failures.
+  }
+
+  // Apply map change immediately from user perspective (single select change).
+  const url = new URL(window.location.href);
+  url.searchParams.set("map", selectedFile);
+  url.searchParams.set("ts", String(Date.now()));
+  window.location.assign(url.toString());
+}
+
 function openSinglePlayerMenu() {
   const mainMenu = document.getElementById("mainMenu");
   const singleMenu = document.getElementById("menu");
+
+  closeMainMenuPanels();
 
   if (mainMenu) {
     mainMenu.style.display = "none";
@@ -1196,6 +1743,8 @@ function backToMainMenu() {
   if (mainMenu) {
     mainMenu.style.display = "block";
   }
+
+  closeMainMenuPanels();
 }
 
 function selectFaction(f) {
@@ -1208,6 +1757,8 @@ function selectFaction(f) {
 async function startGame() {
   document.getElementById("builder").style.display = "none";
   document.getElementById("game").style.display = "block";
+  resetVictoryState();
+  updateVictoryHud();
   turn = 1;
   round = 1;
   activeSide = "player";
@@ -1719,9 +2270,9 @@ function handleDeploymentClick(xIn, yIn) {
 
 function initBattlefield() {
   const field = document.getElementById("battlefield");
-  field.style.setProperty("--scale", String(PIXELS_PER_INCH));
   field.style.setProperty("--board-w", String(BOARD_WIDTH_IN));
   field.style.setProperty("--board-h", String(BOARD_HEIGHT_IN));
+  updateBattlefieldScale();
 
   if (terrainAssetsReady && window.TerrainAssets) {
     groundLayers = typeof window.TerrainAssets.getGroundLayers === "function"
@@ -1742,8 +2293,8 @@ function initBattlefield() {
     }
 
     const rect = field.getBoundingClientRect();
-    const xIn = clamp((event.clientX - rect.left) / PIXELS_PER_INCH, UNIT_RADIUS_IN, BOARD_WIDTH_IN - UNIT_RADIUS_IN);
-    const yIn = clamp((event.clientY - rect.top) / PIXELS_PER_INCH, UNIT_RADIUS_IN, BOARD_HEIGHT_IN - UNIT_RADIUS_IN);
+    const xIn = clamp(((event.clientX - rect.left) / rect.width) * BOARD_WIDTH_IN, UNIT_RADIUS_IN, BOARD_WIDTH_IN - UNIT_RADIUS_IN);
+    const yIn = clamp(((event.clientY - rect.top) / rect.height) * BOARD_HEIGHT_IN, UNIT_RADIUS_IN, BOARD_HEIGHT_IN - UNIT_RADIUS_IN);
 
     if (deploymentState && deploymentState.active) {
       handleDeploymentClick(xIn, yIn);
@@ -1795,11 +2346,135 @@ function buildBattlefieldAtmosphereLayers() {
 }
 
 function generateObjectives() {
+  if (activeMapLayout === "building") {
+    const campfires = getBlueprintObjectiveEntries("campfire");
+    const victories = getBlueprintObjectiveEntries("victory");
+
+    if (campfires.length || victories.length) {
+      objectives = [...campfires, ...victories];
+      return;
+    }
+  }
+
   objectives = [
-    { id: "obj-house-a", xIn: PREDEFINED_HOUSE_A.xIn, yIn: PREDEFINED_HOUSE_A.yIn, owner: null },
-    { id: "obj-mid", xIn: PREDEFINED_CENTER_OBJECTIVE.xIn, yIn: PREDEFINED_CENTER_OBJECTIVE.yIn, owner: null },
-    { id: "obj-house-b", xIn: PREDEFINED_HOUSE_B.xIn, yIn: PREDEFINED_HOUSE_B.yIn, owner: null }
+    { id: "obj-house-a", type: "campfire", xIn: PREDEFINED_HOUSE_A.xIn, yIn: PREDEFINED_HOUSE_A.yIn, owner: null },
+    { id: "obj-mid", type: "victory", xIn: PREDEFINED_CENTER_OBJECTIVE.xIn, yIn: PREDEFINED_CENTER_OBJECTIVE.yIn, owner: null },
+    { id: "obj-house-b", type: "campfire", xIn: PREDEFINED_HOUSE_B.xIn, yIn: PREDEFINED_HOUSE_B.yIn, owner: null }
   ];
+}
+
+function resetVictoryState() {
+  victoryState = {
+    points: { player: 0, enemy: 0 },
+    damageVpAwarded: { player: 0, enemy: 0 },
+    initialArmyPoints: { player: 0, enemy: 0 },
+  };
+}
+
+function updateVictoryHud() {
+  const playerEl = document.getElementById("vpPlayer");
+  const enemyEl = document.getElementById("vpEnemy");
+
+  if (playerEl) {
+    playerEl.innerText = String(victoryState.points.player || 0);
+  }
+
+  if (enemyEl) {
+    enemyEl.innerText = String(victoryState.points.enemy || 0);
+  }
+}
+
+function awardVictoryPoints(side, amount, reason, details = null) {
+  const gain = Math.max(0, Number(amount) || 0);
+
+  if (!gain || !(side in victoryState.points)) {
+    return;
+  }
+
+  victoryState.points[side] += gain;
+  updateVictoryHud();
+
+  const sideLabel = side === "player" ? "Ty" : "Enemy";
+  const lines = [`${sideLabel}: +${gain} VP (${reason})`];
+
+  if (details) {
+    lines.push(details);
+  }
+
+  pushCombatLog(lines, "Punkty zwyciestwa", "support");
+}
+
+function getLostArmyPointsEquivalent(side) {
+  const roster = battleRoster[side] || [];
+  const initial = Math.max(0, Number(victoryState.initialArmyPoints[side]) || 0);
+
+  if (initial <= 0 || !roster.length) {
+    return 0;
+  }
+
+  const remainingEquivalent = roster.reduce((sum, unit) => {
+    const maxHp = Math.max(1, Number(unit?.maxHp) || 1);
+    const hp = clamp(Number(unit?.hp) || 0, 0, maxHp);
+    const ratio = hp / maxHp;
+    const unitPoints = Math.max(0, Number(unit?.cost) || 0);
+    return sum + unitPoints * ratio;
+  }, 0);
+
+  return Math.max(0, initial - remainingEquivalent);
+}
+
+function applyVictoryPointsEndTurn() {
+  const objectiveCounts = objectives.reduce((acc, objective) => {
+    if (objective.type !== "victory") {
+      return acc;
+    }
+
+    if (objective.owner === "player") {
+      acc.player += 1;
+    } else if (objective.owner === "enemy") {
+      acc.enemy += 1;
+    }
+
+    return acc;
+  }, { player: 0, enemy: 0 });
+
+  if (objectiveCounts.player > 0) {
+    awardVictoryPoints("player", objectiveCounts.player, "kontrola punktow zwyciestwa na koniec tury", `Kontrolowane VP punkty: ${objectiveCounts.player}`);
+  }
+
+  if (objectiveCounts.enemy > 0) {
+    awardVictoryPoints("enemy", objectiveCounts.enemy, "kontrola punktow zwyciestwa na koniec tury", `Kontrolowane VP punkty: ${objectiveCounts.enemy}`);
+  }
+
+  const lostEnemyPoints = getLostArmyPointsEquivalent("enemy");
+  const lostPlayerPoints = getLostArmyPointsEquivalent("player");
+  const enemyInitial = Math.max(1, Number(victoryState.initialArmyPoints.enemy) || 1);
+  const playerInitial = Math.max(1, Number(victoryState.initialArmyPoints.player) || 1);
+
+  const playerVpFromDamageTotal = Math.floor((lostEnemyPoints / enemyInitial) / 0.15);
+  const enemyVpFromDamageTotal = Math.floor((lostPlayerPoints / playerInitial) / 0.15);
+  const playerDelta = Math.max(0, playerVpFromDamageTotal - victoryState.damageVpAwarded.player);
+  const enemyDelta = Math.max(0, enemyVpFromDamageTotal - victoryState.damageVpAwarded.enemy);
+
+  if (playerDelta > 0) {
+    victoryState.damageVpAwarded.player += playerDelta;
+    awardVictoryPoints(
+      "player",
+      playerDelta,
+      "straty punktowe przeciwnika (co 15%)",
+      `Straty enemy: ${Math.floor((lostEnemyPoints / enemyInitial) * 100)}%`
+    );
+  }
+
+  if (enemyDelta > 0) {
+    victoryState.damageVpAwarded.enemy += enemyDelta;
+    awardVictoryPoints(
+      "enemy",
+      enemyDelta,
+      "straty punktowe przeciwnika (co 15%)",
+      `Straty gracza: ${Math.floor((lostPlayerPoints / playerInitial) * 100)}%`
+    );
+  }
 }
 
 function resetActionState() {
@@ -1949,6 +2624,7 @@ async function endTurnEarly() {
 
   turn += 1;
   const campfireReports = applyCampfireHealing();
+  applyVictoryPointsEndTurn();
 
   if (campfireReports.length) {
     pushCombatLog(campfireReports, "Ogniska", "support");
@@ -2125,6 +2801,14 @@ function spawnUnits() {
     },
   };
 
+  battleRoster.player = deploymentState.queues.player;
+  battleRoster.enemy = deploymentState.queues.enemy;
+  victoryState.initialArmyPoints.player = battleRoster.player.reduce((sum, unit) => sum + (Number(unit?.cost) || 0), 0);
+  victoryState.initialArmyPoints.enemy = battleRoster.enemy.reduce((sum, unit) => sum + (Number(unit?.cost) || 0), 0);
+  victoryState.damageVpAwarded.player = 0;
+  victoryState.damageVpAwarded.enemy = 0;
+  updateVictoryHud();
+
   const firstPlayer = getDeploymentQueueUnit("player");
 
   if (firstPlayer) {
@@ -2275,9 +2959,14 @@ function createFeatureAt(side, entry, xIn, yIn, patch = {}) {
   const rawWIn = patch.wIn || entry.wIn;
   const rawHIn = patch.hIn || entry.hIn;
   const scale = Math.max(1, Number(patch.renderScale) || 1, Number(patch.hitScale) || 1);
-  const margin = TERRAIN_EDGE_PADDING_IN + Math.max(rawWIn * scale, rawHIn * scale) * 0.5;
-  const clampedX = clamp(xIn, sideBounds.xMin + margin, sideBounds.xMax - margin);
-  const clampedY = clamp(yIn, margin, BOARD_HEIGHT_IN - margin);
+  const marginX = TERRAIN_EDGE_PADDING_IN + (rawWIn * scale) * 0.5;
+  const marginY = TERRAIN_EDGE_PADDING_IN + (rawHIn * scale) * 0.5;
+  const xMin = sideBounds.xMin + marginX;
+  const xMax = sideBounds.xMax - marginX;
+  const yMin = marginY;
+  const yMax = BOARD_HEIGHT_IN - marginY;
+  const clampedX = xMin > xMax ? (sideBounds.xMin + sideBounds.xMax) * 0.5 : clamp(xIn, xMin, xMax);
+  const clampedY = yMin > yMax ? BOARD_HEIGHT_IN * 0.5 : clamp(yIn, yMin, yMax);
 
   return {
     id: crypto.randomUUID(),
@@ -2292,6 +2981,10 @@ function createFeatureAt(side, entry, xIn, yIn, patch = {}) {
     passability: patch.passability ?? entry.passability,
     value: patch.value ?? entry.value,
     usage: patch.usage || entry.usage,
+    forcePlain: Boolean(patch.forcePlain),
+    plainStyle: patch.plainStyle ? String(patch.plainStyle) : null,
+    plainColor: normalizeBlueprintColor(patch.plainColor || patch.color),
+    wallLabel: patch.wallLabel != null ? String(patch.wallLabel) : null,
     side,
     sectorIndex: getSectorIndexForPoint(side, clampedX, clampedY),
   };
@@ -2302,9 +2995,15 @@ function createFeatureAtBoard(entry, xIn, yIn, patch = {}) {
   const rawHIn = patch.hIn || entry.hIn;
   const scale = Math.max(1, Number(patch.renderScale) || 1, Number(patch.hitScale) || 1);
   const marginScale = patch.forcePlace ? 1 : scale;
-  const margin = TERRAIN_EDGE_PADDING_IN + Math.max(rawWIn * marginScale, rawHIn * marginScale) * 0.5;
-  const clampedX = clamp(xIn, margin, BOARD_WIDTH_IN - margin);
-  const clampedY = clamp(yIn, margin, BOARD_HEIGHT_IN - margin);
+  const edgePadding = patch.forcePlace ? 0 : TERRAIN_EDGE_PADDING_IN;
+  const marginX = edgePadding + (rawWIn * marginScale) * 0.5;
+  const marginY = edgePadding + (rawHIn * marginScale) * 0.5;
+  const xMin = marginX;
+  const xMax = BOARD_WIDTH_IN - marginX;
+  const yMin = marginY;
+  const yMax = BOARD_HEIGHT_IN - marginY;
+  const clampedX = xMin > xMax ? BOARD_WIDTH_IN * 0.5 : clamp(xIn, xMin, xMax);
+  const clampedY = yMin > yMax ? BOARD_HEIGHT_IN * 0.5 : clamp(yIn, yMin, yMax);
   const side = clampedX < HALF_BOARD_IN ? "player" : "enemy";
 
   return {
@@ -2320,6 +3019,10 @@ function createFeatureAtBoard(entry, xIn, yIn, patch = {}) {
     passability: patch.passability ?? entry.passability,
     value: patch.value ?? entry.value,
     usage: patch.usage || entry.usage,
+    forcePlain: Boolean(patch.forcePlain),
+    plainStyle: patch.plainStyle ? String(patch.plainStyle) : null,
+    plainColor: normalizeBlueprintColor(patch.plainColor || patch.color),
+    wallLabel: patch.wallLabel != null ? String(patch.wallLabel) : null,
     side,
     sectorIndex: getSectorIndexForPoint(side, clampedX, clampedY),
   };
@@ -2578,20 +3281,22 @@ function generateTerrainBySectors() {
     usage: "Niska przeszkoda skalna.",
   };
 
-  const blockingPlacements = [
-    {
-      entry: houseEntry,
-      xIn: PREDEFINED_HOUSE_A.xIn,
-      yIn: PREDEFINED_HOUSE_A.yIn,
-      patch: { passability: 2, renderScale: 67.5, hitScale: 67.5, visualHint: "house01", forcePlace: true },
-    },
-    {
-      entry: houseEntry,
-      xIn: PREDEFINED_HOUSE_B.xIn,
-      yIn: PREDEFINED_HOUSE_B.yIn,
-      patch: { passability: 2, renderScale: 67.5, hitScale: 67.5, visualHint: "house02", forcePlace: true },
-    },
-  ];
+  const blockingPlacements = activeMapLayout === "forest"
+    ? [
+      {
+        entry: houseEntry,
+        xIn: PREDEFINED_HOUSE_A.xIn,
+        yIn: PREDEFINED_HOUSE_A.yIn,
+        patch: { passability: 2, renderScale: 67.5, hitScale: 67.5, visualHint: "house01", forcePlace: true },
+      },
+      {
+        entry: houseEntry,
+        xIn: PREDEFINED_HOUSE_B.xIn,
+        yIn: PREDEFINED_HOUSE_B.yIn,
+        patch: { passability: 2, renderScale: 67.5, hitScale: 67.5, visualHint: "house02", forcePlace: true },
+      },
+    ]
+    : [];
 
   for (const placement of blockingPlacements) {
     const patch = placement.patch || {};
@@ -2613,45 +3318,252 @@ function generateTerrainBySectors() {
   }
 
   const randomPools = [
-    { entry: treeEntry, count: 12, scale: 3 },
-    { entry: rockEntry, count: 4, scale: 2 },
+    {
+      entry: treeEntry,
+      count: Math.max(8, terrainGenerationConfig.smallPerSide + Math.floor(terrainGenerationConfig.decorMax * 0.35)),
+      scale: 3,
+    },
+    {
+      entry: rockEntry,
+      count: Math.max(4, terrainGenerationConfig.largePerSide + Math.floor(terrainGenerationConfig.smallPerSide * 0.7)),
+      scale: 2,
+    },
   ];
 
   const centerClearRadius = 3.2;
 
-  for (const pool of randomPools) {
-    for (let i = 0; i < pool.count; i++) {
-      for (let attempt = 0; attempt < 120; attempt++) {
-        const xIn = 2 + Math.random() * (BOARD_WIDTH_IN - 4);
+  const canPlaceBlockingAt = (xIn, yIn) => {
+    if (Math.hypot(xIn - PREDEFINED_CENTER_OBJECTIVE.xIn, yIn - PREDEFINED_CENTER_OBJECTIVE.yIn) < centerClearRadius) {
+      return false;
+    }
+
+    if (activeMapLayout === "forest" && Math.hypot(xIn - PREDEFINED_HOUSE_A.xIn, yIn - PREDEFINED_HOUSE_A.yIn) < 3.8) {
+      return false;
+    }
+
+    if (activeMapLayout === "forest" && Math.hypot(xIn - PREDEFINED_HOUSE_B.xIn, yIn - PREDEFINED_HOUSE_B.yIn) < 3.8) {
+      return false;
+    }
+
+    return true;
+  };
+
+  const placeFeatureFromEntry = (entry, xIn, yIn, patch) => {
+    const scaledWIn = (patch.wIn || entry.wIn) * (patch.hitScale || patch.renderScale || 1);
+    const scaledHIn = (patch.hIn || entry.hIn) * (patch.hitScale || patch.renderScale || 1);
+
+    if (overlapsFeatureInList(xIn, yIn, scaledWIn, scaledHIn, terrainFeatures)) {
+      return false;
+    }
+
+    terrainFeatures.push(createFeatureAtBoard(entry, xIn, yIn, patch));
+    return true;
+  };
+
+  if (activeMapLayout === "building") {
+    const wallEntry = {
+      ...rockEntry,
+      id: "building-wall",
+      name: "Sciana budynku",
+      usage: "Sciana pomieszczenia",
+      value: 3,
+    };
+    const crateEntry = {
+      ...rockEntry,
+      id: "building-crate",
+      name: "Skrzynia",
+      usage: "Blokujaca przeszkoda wewnatrz budynku",
+      value: 2,
+    };
+    const wallThick = Math.max(0.2, Number(MAP_BLUEPRINT?.wallThicknessIn) || 0.48);
+
+    const addWall = (xIn, yIn, wIn, hIn, color = null, wallLabel = null) => {
+      terrainFeatures.push(createFeatureAtBoard(wallEntry, xIn, yIn, {
+        passability: 0,
+        renderScale: 1,
+        hitScale: 1,
+        forcePlace: true,
+        wIn,
+        hIn,
+        sizeClass: "small",
+        forcePlain: true,
+        plainStyle: "wall",
+        plainColor: color,
+        wallLabel,
+      }));
+    };
+
+    const addCrate = (xIn, yIn, wIn, hIn) => {
+      terrainFeatures.push(createFeatureAtBoard(crateEntry, xIn, yIn, {
+        passability: 0,
+        renderScale: 1,
+        hitScale: 1,
+        forcePlace: true,
+        wIn,
+        hIn,
+        sizeClass: "small",
+        forcePlain: true,
+        plainStyle: "crate",
+      }));
+    };
+
+    const blueprintWalls = getBlueprintWalls();
+    const blueprintBlockers = getBlueprintBlockers();
+
+    if (hasBlueprintWallsConfig()) {
+      blueprintWalls.forEach((segment) => {
+        addWall(segment.xIn, segment.yIn, segment.wIn, segment.hIn, segment.color || null, segment.label || null);
+      });
+    } else {
+      // Fallback if mapBlueprint.js is missing or empty.
+      addWall(11.0, 6.9, 12.0, wallThick);
+      addWall(23.7, 6.9, 7.4, wallThick);
+      addWall(32.6, 6.9, 9.6, wallThick);
+      addWall(11.8, 11.2, 10.2, wallThick);
+      addWall(21.7, 11.2, 6.0, wallThick);
+      addWall(30.8, 11.2, 11.4, wallThick);
+      addWall(6.8, 17.7, 8.2, wallThick);
+      addWall(24.2, 17.7, 20.6, wallThick);
+      addWall(13.4, 18.9, 19.4, wallThick);
+      addWall(20.0, 21.1, 39.0, wallThick);
+      addWall(30.8, 24.4, 8.2, wallThick);
+      addWall(7.8, 6.0, wallThick, 5.2);
+      addWall(7.8, 14.2, wallThick, 9.4);
+      addWall(7.8, 26.2, wallThick, 4.8);
+      addWall(12.4, 9.5, wallThick, 3.8);
+      addWall(12.4, 15.2, wallThick, 5.2);
+      addWall(12.4, 23.0, wallThick, 4.0);
+      addWall(15.5, 5.1, wallThick, 24.8);
+      addWall(18.8, 6.2, wallThick, 3.2);
+      addWall(18.8, 11.1, wallThick, 4.2);
+      addWall(18.8, 19.5, wallThick, 4.8);
+      addWall(18.8, 27.2, wallThick, 2.8);
+      addWall(24.3, 4.9, wallThick, 24.6);
+      addWall(26.4, 6.1, wallThick, 4.8);
+      addWall(26.4, 15.1, wallThick, 6.9);
+      addWall(26.4, 23.8, wallThick, 3.2);
+      addWall(31.9, 5.4, wallThick, 3.2);
+      addWall(31.9, 12.7, wallThick, 7.7);
+      addWall(31.9, 19.8, wallThick, 3.4);
+    }
+
+    if (hasBlueprintBlockersConfig()) {
+      blueprintBlockers.forEach((blocker) => {
+        addCrate(blocker.xIn, blocker.yIn, blocker.wIn, blocker.hIn);
+      });
+    } else {
+      addCrate(35.6, 18.9, 4.6, 1.2);
+      addCrate(25.1, 26.6, 1.3, 3.1);
+      addCrate(22.6, 8.0, 2.2, 0.8);
+      addCrate(5.9, 24.4, 1.1, 0.7);
+      addCrate(36.9, 5.8, 1.2, 0.8);
+    }
+  } else if (activeMapLayout === "lanes") {
+    const laneY = [BOARD_HEIGHT_IN * 0.28, BOARD_HEIGHT_IN * 0.5, BOARD_HEIGHT_IN * 0.72];
+
+    laneY.forEach((yIn, index) => {
+      const widthScale = index === 1 ? 2.5 : 2.1;
+
+      placeFeatureFromEntry(rockEntry, BOARD_WIDTH_IN * 0.42, yIn, {
+        passability: 0,
+        renderScale: widthScale,
+        hitScale: widthScale,
+      });
+
+      placeFeatureFromEntry(rockEntry, BOARD_WIDTH_IN * 0.58, yIn, {
+        passability: 0,
+        renderScale: widthScale,
+        hitScale: widthScale,
+      });
+    });
+
+    const flankCoverCount = Math.max(6, terrainGenerationConfig.smallPerSide + terrainGenerationConfig.largePerSide);
+
+    for (let i = 0; i < flankCoverCount; i++) {
+      for (let attempt = 0; attempt < 70; attempt++) {
+        const sideBias = Math.random() < 0.5 ? 0.18 : 0.82;
+        const xIn = BOARD_WIDTH_IN * sideBias + (Math.random() - 0.5) * 5.5;
         const yIn = 2 + Math.random() * (BOARD_HEIGHT_IN - 4);
 
-        if (Math.hypot(xIn - PREDEFINED_CENTER_OBJECTIVE.xIn, yIn - PREDEFINED_CENTER_OBJECTIVE.yIn) < centerClearRadius) {
+        if (!canPlaceBlockingAt(xIn, yIn)) {
           continue;
         }
 
-        if (Math.hypot(xIn - PREDEFINED_HOUSE_A.xIn, yIn - PREDEFINED_HOUSE_A.yIn) < 3.8) {
+        if (placeFeatureFromEntry(treeEntry, xIn, yIn, {
+          passability: 0,
+          renderScale: 2.8,
+          hitScale: 2.8,
+        })) {
+          break;
+        }
+      }
+    }
+  } else if (activeMapLayout === "stronghold") {
+    const fortScale = 4.2;
+    placeFeatureFromEntry(houseEntry, BOARD_WIDTH_IN * 0.35, BOARD_HEIGHT_IN * 0.35, {
+      passability: 0,
+      renderScale: fortScale,
+      hitScale: fortScale,
+      visualHint: "house01",
+      forcePlace: true,
+    });
+    placeFeatureFromEntry(houseEntry, BOARD_WIDTH_IN * 0.65, BOARD_HEIGHT_IN * 0.65, {
+      passability: 0,
+      renderScale: fortScale,
+      hitScale: fortScale,
+      visualHint: "house02",
+      forcePlace: true,
+    });
+
+    const chokeCount = Math.max(7, terrainGenerationConfig.largePerSide + terrainGenerationConfig.smallPerSide);
+
+    for (let i = 0; i < chokeCount; i++) {
+      for (let attempt = 0; attempt < 80; attempt++) {
+        const aroundCenter = Math.random() < 0.55;
+        const xIn = aroundCenter
+          ? BOARD_WIDTH_IN * (0.38 + Math.random() * 0.24)
+          : 2 + Math.random() * (BOARD_WIDTH_IN - 4);
+        const yIn = aroundCenter
+          ? BOARD_HEIGHT_IN * (0.32 + Math.random() * 0.36)
+          : 2 + Math.random() * (BOARD_HEIGHT_IN - 4);
+
+        if (!canPlaceBlockingAt(xIn, yIn)) {
           continue;
         }
 
-        if (Math.hypot(xIn - PREDEFINED_HOUSE_B.xIn, yIn - PREDEFINED_HOUSE_B.yIn) < 3.8) {
-          continue;
+        const entry = Math.random() < 0.5 ? treeEntry : rockEntry;
+        const scale = entry === treeEntry ? 2.9 : 2.3;
+
+        if (placeFeatureFromEntry(entry, xIn, yIn, {
+          passability: 0,
+          renderScale: scale,
+          hitScale: scale,
+        })) {
+          break;
         }
+      }
+    }
+  } else {
+    for (const pool of randomPools) {
+      for (let i = 0; i < pool.count; i++) {
+        for (let attempt = 0; attempt < 120; attempt++) {
+          const xIn = 2 + Math.random() * (BOARD_WIDTH_IN - 4);
+          const yIn = 2 + Math.random() * (BOARD_HEIGHT_IN - 4);
 
-        const scaledWIn = pool.entry.wIn * pool.scale;
-        const scaledHIn = pool.entry.hIn * pool.scale;
+          if (!canPlaceBlockingAt(xIn, yIn)) {
+            continue;
+          }
 
-        if (overlapsFeatureInList(xIn, yIn, scaledWIn, scaledHIn, terrainFeatures)) {
-          continue;
+          if (placeFeatureFromEntry(pool.entry, xIn, yIn, {
+            passability: pool.entry.passability,
+            value: pool.entry.value,
+            sizeClass: pool.entry.sizeClass,
+            renderScale: pool.scale,
+            hitScale: pool.scale,
+          })) {
+            break;
+          }
         }
-
-        terrainFeatures.push(createFeatureAtBoard(pool.entry, xIn, yIn, {
-          passability: pool.entry.passability,
-          value: pool.entry.value,
-          sizeClass: pool.entry.sizeClass,
-          renderScale: pool.scale,
-          hitScale: pool.scale,
-        }));
-        break;
       }
     }
   }
@@ -2931,6 +3843,11 @@ function applyFeatureVisualProfile(feature) {
   feature.hitRadiusIn = 0;
   feature.hitOffsetXIn = 0;
   feature.hitOffsetYIn = 0;
+
+  if (feature.forcePlain) {
+    return;
+  }
+
   const defaultScale = feature.type === "fortress" ? 5 : 3;
   const renderScale = clamp(Number(feature.renderScale) || defaultScale, 0.3, 40);
   const hitScale = clamp(Number(feature.hitScale) || defaultScale, 0.3, 40);
@@ -3249,7 +4166,11 @@ function onObjectiveClick(objective) {
 
   objective.owner = "player";
   spendAction("main");
-  setStatus("Cel przejety akcja glowna.");
+  if (objective.type === "victory") {
+    setStatus("Punkt zwyciestwa przejety akcja glowna.");
+  } else {
+    setStatus("Ognisko przejete akcja glowna.");
+  }
   selected = null;
   render();
   maybeAutoEndTurn();
@@ -3259,6 +4180,10 @@ function applyCampfireHealing() {
   const reports = [];
 
   objectives.forEach((objective) => {
+    if (objective.type !== "campfire") {
+      return;
+    }
+
     if (objective.owner !== "player" && objective.owner !== "enemy") {
       return;
     }
@@ -3600,6 +4525,7 @@ function renderUnit(unit) {
   const field = document.getElementById("battlefield");
   const marker = document.createElement("div");
   const currentModels = getUnitCurrentModels(unit);
+  const pxPerIn = getPixelsPerInch();
 
   unit.currentModels = currentModels;
 
@@ -3613,8 +4539,8 @@ function renderUnit(unit) {
     marker.classList.add("selected");
   }
 
-  marker.style.left = `${unit.xIn * PIXELS_PER_INCH}px`;
-  marker.style.top = `${unit.yIn * PIXELS_PER_INCH}px`;
+  marker.style.left = `${unit.xIn * pxPerIn}px`;
+  marker.style.top = `${unit.yIn * pxPerIn}px`;
   marker.title = `${unit.type} | Oddzial ${currentModels}/${Math.max(1, Number(unit.squadSize) || 1)} | HP ${unit.hp}/${unit.maxHp} | Move ${unit.move}\"`;
   marker.innerText = String(currentModels);
   marker.onclick = (event) => {
@@ -3650,11 +4576,19 @@ function renderObjectives() {
   }
 
   const field = document.getElementById("battlefield");
+  const pxPerIn = getPixelsPerInch();
 
   objectives.forEach((objective) => {
     const marker = document.createElement("div");
     marker.classList.add("objective");
-    marker.style.backgroundImage = `url('${OBJECTIVE_SPRITE_URL}')`;
+
+    if (objective.type === "victory") {
+      marker.classList.add("objective--vp");
+      marker.style.backgroundImage = "none";
+    } else {
+      marker.classList.add("objective--campfire");
+      marker.style.backgroundImage = `url('${OBJECTIVE_SPRITE_URL}')`;
+    }
 
     if (objective.owner === "player") {
       marker.classList.add("objective--player");
@@ -3662,11 +4596,11 @@ function renderObjectives() {
       marker.classList.add("objective--enemy");
     }
 
-    marker.style.left = `${objective.xIn * PIXELS_PER_INCH}px`;
-    marker.style.top = `${objective.yIn * PIXELS_PER_INCH}px`;
-    marker.style.width = `${OBJECTIVE_DIAMETER_IN * PIXELS_PER_INCH}px`;
-    marker.style.height = `${OBJECTIVE_DIAMETER_IN * PIXELS_PER_INCH}px`;
-    marker.title = `Cel | owner: ${objective.owner || "neutral"}`;
+    marker.style.left = `${objective.xIn * pxPerIn}px`;
+    marker.style.top = `${objective.yIn * pxPerIn}px`;
+    marker.style.width = `${OBJECTIVE_DIAMETER_IN * pxPerIn}px`;
+    marker.style.height = `${OBJECTIVE_DIAMETER_IN * pxPerIn}px`;
+    marker.title = `${objective.type === "victory" ? "Punkt zwyciestwa" : "Ognisko"} | owner: ${objective.owner || "neutral"}`;
     marker.onclick = (event) => {
       event.stopPropagation();
       onObjectiveClick(objective);
@@ -3686,14 +4620,15 @@ function renderObjectiveCaptureRanges() {
   }
 
   const field = document.getElementById("battlefield");
+  const pxPerIn = getPixelsPerInch();
   const captureCenterRange = OBJECTIVE_RADIUS_IN + OBJECTIVE_CAPTURE_RANGE_IN;
-  const diameter = captureCenterRange * 2 * PIXELS_PER_INCH;
+  const diameter = captureCenterRange * 2 * pxPerIn;
 
   objectives.forEach((objective) => {
     const ring = document.createElement("div");
     ring.classList.add("objective-range");
-    ring.style.left = `${objective.xIn * PIXELS_PER_INCH}px`;
-    ring.style.top = `${objective.yIn * PIXELS_PER_INCH}px`;
+    ring.style.left = `${objective.xIn * pxPerIn}px`;
+    ring.style.top = `${objective.yIn * pxPerIn}px`;
     ring.style.width = `${diameter}px`;
     ring.style.height = `${diameter}px`;
     field.appendChild(ring);
@@ -3775,7 +4710,8 @@ function renderDeploymentZones() {
   }
 
   const field = document.getElementById("battlefield");
-  const diameterPx = DEPLOY_RADIUS_IN * 2 * PIXELS_PER_INCH;
+  const pxPerIn = getPixelsPerInch();
+  const diameterPx = DEPLOY_RADIUS_IN * 2 * pxPerIn;
 
   ["player", "enemy"].forEach((side) => {
     const anchor = getDeploymentAnchor(side);
@@ -3788,14 +4724,14 @@ function renderDeploymentZones() {
 
     zone.style.width = `${diameterPx}px`;
     zone.style.height = `${diameterPx}px`;
-    zone.style.left = `${anchor.xIn * PIXELS_PER_INCH}px`;
-    zone.style.top = `${anchor.yIn * PIXELS_PER_INCH}px`;
+    zone.style.left = `${anchor.xIn * pxPerIn}px`;
+    zone.style.top = `${anchor.yIn * pxPerIn}px`;
     field.appendChild(zone);
 
     const anchorEl = document.createElement("div");
     anchorEl.classList.add("deploy-anchor", side === "player" ? "deploy-anchor--player" : "deploy-anchor--enemy");
-    anchorEl.style.left = `${anchor.xIn * PIXELS_PER_INCH}px`;
-    anchorEl.style.top = `${anchor.yIn * PIXELS_PER_INCH}px`;
+    anchorEl.style.left = `${anchor.xIn * pxPerIn}px`;
+    anchorEl.style.top = `${anchor.yIn * pxPerIn}px`;
     field.appendChild(anchorEl);
   });
 }
@@ -3835,6 +4771,7 @@ function renderGroundOverlay() {
 
 function renderSectors() {
   const field = document.getElementById("battlefield");
+  const pxPerIn = getPixelsPerInch();
 
   for (let sideIndex = 0; sideIndex < 2; sideIndex++) {
     const side = sideIndex === 0 ? "player" : "enemy";
@@ -3845,10 +4782,10 @@ function renderSectors() {
       const label = document.createElement("div");
 
       sectorEl.classList.add("sector-cell");
-      sectorEl.style.left = `${rect.xMin * PIXELS_PER_INCH}px`;
-      sectorEl.style.top = `${rect.yMin * PIXELS_PER_INCH}px`;
-      sectorEl.style.width = `${(rect.xMax - rect.xMin) * PIXELS_PER_INCH}px`;
-      sectorEl.style.height = `${(rect.yMax - rect.yMin) * PIXELS_PER_INCH}px`;
+      sectorEl.style.left = `${rect.xMin * pxPerIn}px`;
+      sectorEl.style.top = `${rect.yMin * pxPerIn}px`;
+      sectorEl.style.width = `${(rect.xMax - rect.xMin) * pxPerIn}px`;
+      sectorEl.style.height = `${(rect.yMax - rect.yMin) * pxPerIn}px`;
 
       label.classList.add("sector-label");
       label.innerText = `${side === "player" ? "P" : "E"}-${sectorIndex + 1}`;
@@ -3860,18 +4797,36 @@ function renderSectors() {
 
 function renderTerrain() {
   const field = document.getElementById("battlefield");
+  const pxPerIn = getPixelsPerInch();
 
   terrainFeatures.forEach((feature) => {
     const terrainEl = document.createElement("div");
     const renderSize = getFeatureRenderSize(feature);
     terrainEl.classList.add("terrain", `terrain--${feature.type}`);
     terrainEl.classList.add(feature.passability <= 0 ? "terrain--blocking" : "terrain--passable");
-    terrainEl.style.left = `${feature.xIn * PIXELS_PER_INCH}px`;
-    terrainEl.style.top = `${feature.yIn * PIXELS_PER_INCH}px`;
-    terrainEl.style.width = `${renderSize.wIn * PIXELS_PER_INCH}px`;
-    terrainEl.style.height = `${renderSize.hIn * PIXELS_PER_INCH}px`;
+    terrainEl.style.left = `${feature.xIn * pxPerIn}px`;
+    terrainEl.style.top = `${feature.yIn * pxPerIn}px`;
+    terrainEl.style.width = `${renderSize.wIn * pxPerIn}px`;
+    terrainEl.style.height = `${renderSize.hIn * pxPerIn}px`;
 
-    if (terrainAssetsReady && window.TerrainAssets) {
+    if (feature.forcePlain) {
+      if (feature.plainStyle === "wall") {
+        if (feature.plainColor) {
+          terrainEl.style.background = feature.plainColor;
+          terrainEl.style.border = `1px solid ${feature.plainColor}`;
+          terrainEl.style.boxShadow = `0 0 0 1px ${feature.plainColor} inset, 0 0 8px ${feature.plainColor}`;
+        } else {
+          terrainEl.style.background = "linear-gradient(180deg, rgba(161, 147, 117, 0.92), rgba(120, 108, 86, 0.9))";
+          terrainEl.style.border = "1px solid rgba(56, 46, 34, 0.78)";
+          terrainEl.style.boxShadow = "0 0 0 1px rgba(205, 186, 142, 0.18) inset";
+        }
+      } else if (feature.plainStyle === "crate") {
+        terrainEl.style.background = "linear-gradient(180deg, rgba(150, 138, 112, 0.95), rgba(112, 102, 82, 0.95))";
+        terrainEl.style.border = "1px solid rgba(58, 48, 36, 0.8)";
+      }
+
+      // Wall labels are intentionally hidden for cleaner map view.
+    } else if (terrainAssetsReady && window.TerrainAssets) {
       const visual = window.TerrainAssets.pickVisual(feature);
 
       if (visual) {
@@ -3910,14 +4865,14 @@ function renderTerrain() {
       const footprint = getFeatureFootprint(feature);
       const offsetXIn = Number(feature.hitOffsetXIn) || 0;
       const offsetYIn = Number(feature.hitOffsetYIn) || 0;
-      const centerX = (feature.xIn + offsetXIn) * PIXELS_PER_INCH;
-      const centerY = (feature.yIn + offsetYIn) * PIXELS_PER_INCH;
+      const centerX = (feature.xIn + offsetXIn) * pxPerIn;
+      const centerY = (feature.yIn + offsetYIn) * pxPerIn;
 
       hitboxEl.classList.add("terrain-hitbox");
 
       if (feature.hitShape === "circle") {
         const radiusIn = Math.max(0.05, Number(feature.hitRadiusIn) || Math.min(footprint.wIn, footprint.hIn) * 0.5);
-        const diameterPx = radiusIn * 2 * PIXELS_PER_INCH;
+        const diameterPx = radiusIn * 2 * pxPerIn;
         hitboxEl.classList.add("terrain-hitbox--circle");
         hitboxEl.style.width = `${diameterPx}px`;
         hitboxEl.style.height = `${diameterPx}px`;
@@ -3928,8 +4883,8 @@ function renderTerrain() {
           hitboxEl.classList.add("terrain-hitbox--box");
         }
 
-        hitboxEl.style.width = `${footprint.wIn * PIXELS_PER_INCH}px`;
-        hitboxEl.style.height = `${footprint.hIn * PIXELS_PER_INCH}px`;
+        hitboxEl.style.width = `${footprint.wIn * pxPerIn}px`;
+        hitboxEl.style.height = `${footprint.hIn * pxPerIn}px`;
       }
 
       hitboxEl.style.left = `${centerX}px`;
@@ -3981,13 +4936,14 @@ function renderRangeRing() {
     }
   }
 
-  const diameterPx = rangeIn * 2 * PIXELS_PER_INCH;
+  const pxPerIn = getPixelsPerInch();
+  const diameterPx = rangeIn * 2 * pxPerIn;
 
   ring.classList.add("range-ring");
   ring.style.width = `${diameterPx}px`;
   ring.style.height = `${diameterPx}px`;
-  ring.style.left = `${selected.xIn * PIXELS_PER_INCH}px`;
-  ring.style.top = `${selected.yIn * PIXELS_PER_INCH}px`;
+  ring.style.left = `${selected.xIn * pxPerIn}px`;
+  ring.style.top = `${selected.yIn * pxPerIn}px`;
 
   field.appendChild(ring);
 }
@@ -4128,6 +5084,12 @@ function renderSelectedCard() {
 
 function render() {
   const field = document.getElementById("battlefield");
+
+  if (!field) {
+    return;
+  }
+
+  updateBattlefieldScale();
   hideUnitHoverCard();
   field.innerHTML = "";
 
@@ -4148,12 +5110,27 @@ function render() {
   renderCombatLog();
   renderTerrainSummary();
   updateActionHud();
+  updateVictoryHud();
 
   if (!units.some((unit) => unit.side === "enemy")) {
     setStatus("Wszyscy przeciwnicy pokonani. Wygrana!");
   }
 }
 
+loadUiTheme();
+initCustomThemeControls();
 initRoomManager();
+initMapSelector();
+resetVictoryState();
+
+window.addEventListener("resize", () => {
+  const gameRoot = document.getElementById("game");
+
+  if (!gameRoot || gameRoot.style.display === "none") {
+    return;
+  }
+
+  render();
+});
 
 

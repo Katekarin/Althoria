@@ -1,19 +1,95 @@
-﻿body {
+﻿html,
+body {
+  min-height: 100%;
+}
+
+body {
+  --page-radial-a: rgba(148, 98, 57, 0.22);
+  --page-radial-b: rgba(70, 93, 58, 0.18);
+  --page-bg-a: #18140f;
+  --page-bg-b: #201b15;
+  --page-bg-c: #17130f;
+  --panel-bg-a: #241b13;
+  --panel-bg-b: #1a140f;
+  --panel-border: #5c4632;
+  --button-a: #4f3a28;
+  --button-b: #392819;
+  --button-border: #7f5f3f;
+  --text-main: #efe5d4;
+  --text-soft: #c9b193;
   font-family: "Trebuchet MS", "Segoe UI", sans-serif;
   background:
-    radial-gradient(circle at 15% 18%, rgba(148, 98, 57, 0.22), transparent 30%),
-    radial-gradient(circle at 80% 10%, rgba(70, 93, 58, 0.18), transparent 34%),
-    linear-gradient(165deg, #18140f, #201b15 42%, #17130f);
-  color: #efe5d4;
+    radial-gradient(circle at 15% 18%, var(--page-radial-a), transparent 30%),
+    radial-gradient(circle at 80% 10%, var(--page-radial-b), transparent 34%),
+    linear-gradient(165deg, var(--page-bg-a), var(--page-bg-b) 42%, var(--page-bg-c));
+  color: var(--text-main);
   text-align: center;
+  min-height: 100dvh;
+  margin: 0;
+  padding: 10px 12px 18px;
+  box-sizing: border-box;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: inherit;
+}
+
+body[data-theme="forest"] {
+  --page-radial-a: rgba(78, 122, 73, 0.24);
+  --page-radial-b: rgba(39, 93, 89, 0.18);
+  --page-bg-a: #121915;
+  --page-bg-b: #1a241d;
+  --page-bg-c: #101712;
+  --panel-bg-a: #1a261d;
+  --panel-bg-b: #131d17;
+  --panel-border: #3f6048;
+  --button-a: #35543f;
+  --button-b: #274032;
+  --button-border: #5d8a6c;
+  --text-main: #e2efe4;
+  --text-soft: #b9d0bc;
+}
+
+body[data-theme="ash"] {
+  --page-radial-a: rgba(132, 124, 114, 0.24);
+  --page-radial-b: rgba(95, 92, 102, 0.2);
+  --page-bg-a: #171717;
+  --page-bg-b: #1f1f22;
+  --page-bg-c: #131316;
+  --panel-bg-a: #25252a;
+  --panel-bg-b: #1d1d21;
+  --panel-border: #62626a;
+  --button-a: #4c4c55;
+  --button-b: #383840;
+  --button-border: #7b7b87;
+  --text-main: #ededf0;
+  --text-soft: #c8c8cf;
+}
+
+body[data-theme="royal"] {
+  --page-radial-a: rgba(194, 144, 62, 0.26);
+  --page-radial-b: rgba(111, 86, 46, 0.2);
+  --page-bg-a: #1a1410;
+  --page-bg-b: #241c15;
+  --page-bg-c: #15100d;
+  --panel-bg-a: #2c2118;
+  --panel-bg-b: #1e1610;
+  --panel-border: #83633f;
+  --button-a: #6a4a2a;
+  --button-b: #4d351f;
+  --button-border: #a77c49;
+  --text-main: #f2e7d2;
+  --text-soft: #d8c3a2;
 }
 
 .menu-options-panel {
   max-width: 760px;
   margin: 12px auto 0;
   text-align: left;
-  background: linear-gradient(180deg, #261d15, #1c1510);
-  border: 1px solid #5c4632;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--panel-bg-a) 85%, #000 15%), color-mix(in srgb, var(--panel-bg-b) 90%, #000 10%));
+  border: 1px solid var(--panel-border);
   padding: 12px;
 }
 
@@ -91,16 +167,96 @@
 
 .main-menu {
   max-width: 760px;
-  margin: 16px auto 0;
+  margin: 16px auto;
   padding: 14px;
-  background: linear-gradient(180deg, #241b13, #1a140f);
-  border: 1px solid #5c4632;
+  background: linear-gradient(180deg, var(--panel-bg-a), var(--panel-bg-b));
+  border: 1px solid var(--panel-border);
+}
+
+.main-menu-actions {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.main-menu-btn {
+  margin: 0;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  padding: 11px 10px;
+}
+
+.main-menu-panel {
+  margin-top: 12px;
+}
+
+.menu-label {
+  display: block;
+  margin-bottom: 6px;
+}
+
+.menu-control {
+  width: 100%;
+  padding: 10px 11px;
+  margin-bottom: 6px;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel-bg-b) 82%, #000 18%);
+  color: var(--text-main);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
+}
+
+.menu-help {
+  color: var(--text-soft);
+}
+
+.theme-custom-panel {
+  margin-top: 12px;
+  border-top: 1px solid var(--panel-border);
+  padding-top: 10px;
+}
+
+.theme-custom-panel h4 {
+  margin: 0 0 8px;
+}
+
+.custom-color-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.color-control {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px;
+  align-items: center;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 7px;
+  background: color-mix(in srgb, var(--panel-bg-a) 84%, #000 16%);
+}
+
+.color-control label {
+  font-size: 12px;
+  color: var(--text-soft);
+  text-align: left;
+}
+
+.color-control input[type="color"] {
+  width: 42px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  background: transparent;
 }
 
 .battlefield {
   --scale: 24;
   --board-w: 40;
-  --board-h: 29.5;
+  --board-h: 30;
   width: calc(var(--board-w) * var(--scale) * 1px);
   height: calc(var(--board-h) * var(--scale) * 1px);
   margin: 20px auto 10px;
@@ -168,6 +324,25 @@
   transform: translate(-50%, -50%);
   pointer-events: none;
   border: none;
+}
+
+.terrain-wall-label {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 10px;
+  border: 1px solid rgba(0, 0, 0, 0.65);
+  background: rgba(15, 15, 15, 0.74);
+  color: #f5f5f5;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+  pointer-events: none;
 }
 
 .terrain--barricade {
@@ -267,6 +442,17 @@
   transform: translate(-50%, -50%);
   cursor: pointer;
   z-index: 2;
+}
+
+.objective--campfire {
+  border-color: #5ba8db;
+  background-color: rgba(30, 64, 92, 0.56);
+}
+
+.objective--vp {
+  border-color: #70cc70;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #5fde5f, #2a8f37);
 }
 
 .objective--player {
@@ -596,6 +782,14 @@
 }
 
 @media (max-width: 1000px) {
+  .main-menu-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .custom-color-controls {
+    grid-template-columns: 1fr;
+  }
+
   .game-layout {
     grid-template-columns: 1fr;
   }
@@ -607,7 +801,7 @@
   .battlefield {
     width: min(calc(var(--board-w) * var(--scale) * 1px), 100%);
     height: auto;
-    aspect-ratio: 40 / 29.5;
+    aspect-ratio: var(--board-w) / var(--board-h);
   }
 }
 
@@ -664,7 +858,12 @@
   display: block;
   width: 100%;
   margin: 6px 0 10px;
-  padding: 6px;
+  padding: 10px 11px;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel-bg-b) 82%, #000 18%);
+  color: var(--text-main);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
 }
 
 .builder-select[multiple] {
@@ -688,8 +887,8 @@
   max-width: 760px;
   margin: 14px auto 0;
   text-align: left;
-  background: linear-gradient(180deg, #261d15, #1c1510);
-  border: 1px solid #5c4632;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--panel-bg-a) 85%, #000 15%), color-mix(in srgb, var(--panel-bg-b) 90%, #000 10%));
+  border: 1px solid var(--panel-border);
   padding: 12px;
 }
 
@@ -701,10 +900,32 @@
   display: block;
   width: 100%;
   margin: 6px 0;
-  padding: 6px;
-  background: #1a140f;
-  color: #e6d8c5;
-  border: 1px solid #6a5138;
+  padding: 10px 11px;
+  border-radius: 8px;
+  border: 1px solid var(--panel-border);
+  background: color-mix(in srgb, var(--panel-bg-b) 82%, #000 18%);
+  color: var(--text-main);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
+}
+
+input[type="text"],
+input[type="number"],
+select,
+textarea {
+  font: inherit;
+  outline: none;
+}
+
+input[type="text"]:focus,
+input[type="number"]:focus,
+select:focus,
+textarea:focus,
+.builder-select:focus,
+.room-input:focus,
+.menu-control:focus {
+  border-color: #e5cd55;
+  box-shadow: 0 0 0 2px rgba(229, 205, 85, 0.22);
+  background: color-mix(in srgb, var(--panel-bg-a) 86%, #000 14%);
 }
 
 .room-list {
@@ -817,5 +1038,13 @@
 button {
   margin: 5px;
   padding: 10px;
+  background: linear-gradient(180deg, var(--button-a), var(--button-b));
+  color: var(--text-main);
+  border: 1px solid var(--button-border);
+  cursor: pointer;
+}
+
+button:hover {
+  filter: brightness(1.06);
 }
 

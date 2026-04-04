@@ -1,0 +1,137 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+  color: #efe5d4;
+  background: linear-gradient(150deg, #16120f, #221911 45%, #15100c);
+}
+
+.editor-shell {
+  display: grid;
+  grid-template-columns: minmax(320px, 420px) 1fr;
+  gap: 14px;
+  padding: 12px;
+}
+
+.editor-panel {
+  border: 1px solid #6a5137;
+  background: linear-gradient(180deg, #241b13, #19130f);
+  padding: 12px;
+}
+
+h1 {
+  margin: 0 0 6px;
+  font-size: 24px;
+}
+
+label {
+  display: block;
+  margin: 10px 0 4px;
+  font-size: 13px;
+}
+
+input,
+select,
+textarea,
+button {
+  width: 100%;
+  font: inherit;
+  color: #f1e5d4;
+  background: #1b1510;
+  border: 1px solid #6d5237;
+  padding: 8px;
+}
+
+textarea {
+  resize: vertical;
+}
+
+button {
+  cursor: pointer;
+  background: linear-gradient(180deg, #4f3a28, #392819);
+}
+
+button:hover {
+  filter: brightness(1.08);
+}
+
+button.primary {
+  border-color: #e5cd55;
+}
+
+.row2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.actions {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 8px;
+}
+
+.actions + .actions {
+  grid-template-columns: 1fr;
+}
+
+.actions--load {
+  grid-template-columns: 1fr 1fr;
+}
+
+.actions--save {
+  grid-template-columns: 1fr;
+}
+
+#loadFileInput {
+  padding: 6px;
+}
+
+.hint {
+  margin: 6px 0;
+  color: #ccb79a;
+  font-size: 12px;
+}
+
+.status {
+  margin: 8px 0 0;
+  padding: 8px;
+  border: 1px solid #71563a;
+  background: rgba(34, 23, 14, 0.9);
+  font-size: 12px;
+}
+
+.canvas-wrap {
+  border: 1px solid #6a5137;
+  background: #161616;
+  min-height: 78vh;
+  overflow: auto;
+  padding: 8px;
+}
+
+#mapCanvas {
+  display: block;
+  border: 2px solid #6d5237;
+  background: linear-gradient(135deg, #373737, #2a2a2a);
+}
+
+.download-link {
+  display: inline-block;
+  margin-top: 8px;
+  color: #f0dca9;
+}
+
+@media (max-width: 980px) {
+  .editor-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .canvas-wrap {
+    min-height: 54vh;
+  }
+}

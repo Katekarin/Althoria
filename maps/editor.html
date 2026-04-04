@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Edytor map Athoria</title>
+<link rel="stylesheet" href="editor.css">
+</head>
+<body>
+  <main class="editor-shell">
+    <section class="editor-panel">
+      <h1>Edytor map</h1>
+      <p class="hint">Siatka: 1". Snap stawiania: 0.5".</p>
+
+      <label for="mapIdInput">ID mapy</label>
+      <input id="mapIdInput" type="text" value="custom-map-01" maxlength="60">
+
+      <div class="row2">
+        <div>
+          <label for="boardWInput">Szerokosc (inch)</label>
+          <input id="boardWInput" type="number" min="10" max="80" step="0.5" value="30">
+        </div>
+        <div>
+          <label for="boardHInput">Wysokosc (inch)</label>
+          <input id="boardHInput" type="number" min="10" max="80" step="0.5" value="30">
+        </div>
+      </div>
+
+      <label for="toolSelect">Narzędzie</label>
+      <select id="toolSelect">
+        <option value="wall">Sciana</option>
+        <option value="blocker">Bloker</option>
+        <option value="campfire">Ognisko</option>
+        <option value="victory">Punkt zwyciestwa</option>
+        <option value="deployP1">Start gracza 1 (kratka 1x1)</option>
+        <option value="deployP2">Start gracza 2 (kratka 1x1)</option>
+        <option value="erase">Usun obiekt</option>
+      </select>
+
+      <div id="sizeControls" class="row2">
+        <div>
+          <label for="objWInput">Szer. obiektu (inch)</label>
+          <input id="objWInput" type="number" min="0.5" max="20" step="0.5" value="1">
+        </div>
+        <div>
+          <label for="objHInput">Wys. obiektu (inch)</label>
+          <input id="objHInput" type="number" min="0.5" max="20" step="0.5" value="1">
+        </div>
+      </div>
+
+      <div class="actions">
+        <button id="applyBoardBtn" type="button">Ustaw rozmiar planszy</button>
+        <button id="undoBtn" type="button">Cofnij ostatni</button>
+        <button id="clearBtn" type="button">Wyczysc wszystko</button>
+      </div>
+
+      <div class="actions actions--load">
+        <input id="loadFileInput" type="file" accept=".js,text/javascript">
+        <button id="loadBtn" type="button">Wczytaj plik mapy</button>
+      </div>
+
+      <div class="actions actions--save">
+        <button id="saveToFolderBtn" type="button" class="primary">Zapisz mape do folderu maps</button>
+      </div>
+
+      <textarea id="exportOutput" rows="12" spellcheck="false" placeholder="Tutaj pojawi sie wygenerowany plik mapy..."></textarea>
+
+      <p id="status" class="status">Tryb: Sciana. Kliknij punkt startowy.</p>
+      <p class="hint">Mapa zapisuje deployment jako kratki 1x1 dla gracza 1 i 2. Zapis jest ograniczony do folderu maps w projekcie.</p>
+    </section>
+
+    <section class="canvas-wrap">
+      <canvas id="mapCanvas"></canvas>
+    </section>
+  </main>
+
+  <script src="editor.js"></script>
+</body>
+</html>
